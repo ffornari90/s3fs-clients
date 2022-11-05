@@ -1,0 +1,93 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: s3fs-rgw
+  namespace: s3fs-ns
+spec: 
+  selector:
+    matchLabels:
+      app: s3fs-rgw
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: s3fs-rgw
+    spec:
+      hostAliases:
+      - ip: "131.154.161.228"
+        hostnames:
+        - "keycloak.cr.cnaf.infn.it"
+      volumes:
+      - name: trust
+        emptyDir: {}
+      - name: dev-fuse
+        hostPath:
+          path: /dev/fuse
+      initContainers:
+      - name: ca-bundle
+        image: "alpine"
+        command: [sh, -c]
+        args:
+          - cd /tmp &&
+            wget 'http://repository.egi.eu/sw/production/cas/1/current/tgz/' &&
+            mkdir tgz && mkdir certificates &&
+            for tgz in $(cat index.html | awk -F'"' '{print $2}' | grep tar.gz);
+            do wget http://repository.egi.eu/sw/production/cas/1/current/tgz/$tgz -O tgz/$tgz;
+            done && for tgz in $(ls tgz/);
+            do tar xzf tgz/$tgz --strip-components=1 -C certificates/; done &&
+            for f in $(find certificates/ -type f -name '*.pem'); 
+            do cat $f >> certs/ca-certificates.crt; done &&
+            wget 'https://crt.sh/?d=2475254782' -O certs/geant-ov-rsa-ca.crt && 
+            cat certs/geant-ov-rsa-ca.crt >> certs/ca-certificates.crt
+        volumeMounts:
+        - name: trust
+          mountPath: /tmp/certs
+      containers:
+      - name: s3fs-rgw
+        image: ffornari/s3fs-rgw-sts
+        imagePullPolicy: Always
+        command: ["/bin/sh", "-c"]
+        args:
+          - s3fs bucket /home/docker/mnt/rgw 
+            -o use_path_request_style 
+            -o url=$ENDPOINT_URL 
+            -o endpoint=$REGION_NAME 
+            -o credlib=librgw-sts.so 
+            -o credlib_opts=Info -f
+        env:
+        - name: AWS_EC2_METADATA_DISABLED
+          value: "true"
+        - name: ROLE_ARN
+          value: "arn:aws:iam:::role/S3AccessWebId"
+        - name: ROLE_NAME
+          value: "S3AccessWebId"
+        - name: KC_HOST
+          value: "https://keycloak.cr.cnaf.infn.it"
+        - name: KC_REALM
+          value: "myrealm"
+        - name: ENDPOINT_URL
+          value: "http://rook-ceph-rgw-my-store-rook-ceph.apps.cnsa.cr.cnaf.infn.it"
+        - name: REGION_NAME
+          value: "tier1"
+        - name: CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-secret
+              key: CLIENT_ID
+        - name: CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-secret
+              key: CLIENT_SECRET
+        securityContext:
+          capabilities:
+            add: ["SYS_ADMIN"]
+          privileged: true
+        volumeMounts:
+        - mountPath: /dev/fuse
+          name: dev-fuse
+        - mountPath: /etc/ssl/certs
+          name: trust
+          readOnly: true
