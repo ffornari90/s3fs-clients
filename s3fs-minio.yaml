@@ -50,10 +50,25 @@ spec:
         imagePullPolicy: Always
         command: ["/bin/sh", "-c"]
         args:
-          - sleep infinity
+          - eval $(oidc-agent-service use) &&
+            oidc-gen --scope-all
+            --confirm-default
+            --iss=https://iam-indigo.cr.cnaf.infn.it/
+            $OIDC_CLIENT_NAME &&
+            s3fs ffornari /home/docker/mnt/minio
+            -o use_path_request_style
+            -o url=https://$MINIO_HOST
+            -o no_check_certificate
+            -o credlib=liboidc-vault-minio.so
+            -o credlib_opts=Info -f
         env:
         - name: OIDC_CLIENT_NAME
           value: "s3fs-minio-client"
+        - name: OIDC_ENCRYPTION_PW
+          valueFrom:
+            secretKeyRef:
+              name: oidc-secret
+              key: OIDC_ENCRYPTION_PW
         - name: MINIO_HOST
           value: "minio-api-minio-ns.apps.cnsa.cr.cnaf.infn.it"
         - name: VAULT_HOST
@@ -66,8 +81,6 @@ spec:
           value: "true"
         - name: VAULT_TLS_VERIFY
           value: "false"
-        - name: HOME
-          value: "/tmp"
         securityContext:
           capabilities:
             add: ["SYS_ADMIN"]
